@@ -312,14 +312,41 @@ jobs:
               echo '</details>'
             fi
             echo
-            echo "### Recursos en AWS con tags Project=prueba-devops, Environment=$TARGET_ENV"
-            echo
-            arns="$(aws resourcegroupstaggingapi get-resources \
-              --tag-filters Key=Project,Values=prueba-devops Key=Environment,Values="$TARGET_ENV" \
-              --query 'ResourceTagMappingList[].ResourceARN' --output text | tr '\t' '\n' | sed '/^$/d')"
-            if [ -z "$arns" ]; then
-              echo "_Ninguno: el ambiente no tiene recursos en AWS._"
+            if [ "$DESTROY" = "true" ]; then
+              # La API de tags de AWS tarda en reflejar borrados (y conserva las task
+              # definitions INACTIVE), así que tras un destroy se consulta el ESTADO
+              # real de cada recurso clave.
+              name="prueba-devops-$TARGET_ENV"
+              vpcs=$(aws ec2 describe-vpcs --filters Name=tag:Project,Values=prueba-devops Name=tag:Environment,Values="$TARGET_ENV" --query 'length(Vpcs)')
+              nats=$(aws ec2 describe-nat-gateways --filter Name=tag:Environment,Values="$TARGET_ENV" Name=tag:Project,Values=prueba-devops Name=state,Values=pending,available,deleting --query 'length(NatGateways)')
+              eips=$(aws ec2 describe-addresses --filters Name=tag:Environment,Values="$TARGET_ENV" Name=tag:Project,Values=prueba-devops --query 'length(Addresses)')
+              albs=$(aws elbv2 describe-load-balancers --names "$name-alb" --query 'length(LoadBalancers)' 2>/dev/null || echo 0)
+              ecs=$(aws ecs describe-clusters --clusters "$name-cluster" --query "length(clusters[?status=='ACTIVE'])")
+              echo "### Verificación en AWS"
+              echo
+              echo '| Recurso | Activos |'
+              echo '|---|---|'
+              echo "| VPC | $vpcs |"
+              echo "| NAT Gateway | $nats |"
+              echo "| Elastic IP | $eips |"
+              echo "| ALB | $albs |"
+              echo "| ECS cluster | $ecs |"
+              echo
+              if [ $((vpcs + nats + eips + albs + ecs)) -eq 0 ]; then
+                echo "✅ **$TARGET_ENV no tiene recursos con costo en AWS.**"
+              else
+                echo "⚠️ Quedan recursos activos; revisar."
+                echo "::warning::Quedan recursos activos en $TARGET_ENV" >&2
+              fi
             else
+              echo "### Recursos en AWS con tags Project=prueba-devops, Environment=$TARGET_ENV"
+              echo
+              echo "_Fuente independiente de Terraform: sirve para detectar recursos huérfanos. Se omiten tareas y revisiones de task definition (efímeras)._"
+              echo
+              arns="$(aws resourcegroupstaggingapi get-resources \
+                --tag-filters Key=Project,Values=prueba-devops Key=Environment,Values="$TARGET_ENV" \
+                --query 'ResourceTagMappingList[].ResourceARN' --output text | tr '\t' '\n' \
+                | grep -vE ':task/|:task-definition/' | sed '/^$/d')"
               echo '| Servicio | Tipo | ARN |'
               echo '|---|---|---|'
               echo "$arns" | awk -F: '{split($6, r, "/"); print "| " $3 " | " r[1] " | `" $0 "` |"}' | sort
