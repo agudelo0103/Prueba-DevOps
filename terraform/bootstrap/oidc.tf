@@ -20,7 +20,9 @@ data "aws_iam_openid_connect_provider" "github" {
 
 locals {
   oidc_provider_arn = var.create_github_oidc_provider ? aws_iam_openid_connect_provider.github[0].arn : data.aws_iam_openid_connect_provider.github[0].arn
-  oidc_sub_prefix   = "repo:${var.github_repository}"
+  github_owner      = split("/", var.github_repository)[0]
+  github_repo_name  = split("/", var.github_repository)[1]
+  oidc_sub_prefix   = "repo:${local.github_owner}@${var.github_owner_id}/${local.github_repo_name}@${var.github_repository_id}"
 }
 
 # ---------------- Rol de PLAN (solo lectura) ----------------------------------

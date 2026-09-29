@@ -137,6 +137,7 @@ merge a main
 
 - Las credenciales son **temporales** (STS, 1 h máximo) y cada sesión se llama `gha-<acción>-<env>-<run_id>`, así que en **CloudTrail se sabe qué run hizo qué**.
 - Aunque alguien modifique un workflow en un PR, **no puede obtener el rol de prod**: ese token no trae `environment:prod`.
+- El claim `sub` usa el **formato inmutable** de GitHub (`repo:owner@<owner_id>/repo@<repo_id>:...`): si el repo se borra y alguien crea otro con el mismo nombre, sus tokens no sirven.
 - Los roles que crea el pipeline (task roles de ECS) **deben** llevar el **permissions boundary** `prueba-devops-workload-boundary`, o IAM rechaza la creación. Así el pipeline no puede crear un rol más poderoso que ese techo, lo que evita que escale sus propios privilegios.
 - Las únicas credenciales estáticas son las del administrador que corrió el **bootstrap** una sola vez. En una organización real serían credenciales SSO con MFA y temporales.
 
