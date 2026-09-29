@@ -119,13 +119,13 @@ data "aws_iam_policy_document" "deploy" {
   }
 
   statement {
-    sid       = "PassOwnRolesToEcs"
+    sid       = "PassOwnRolesToServices"
     actions   = ["iam:PassRole"]
     resources = ["arn:${data.aws_partition.current.partition}:iam::${local.account_id}:role/${var.project}-${each.key}-*"]
     condition {
       test     = "StringEquals"
       variable = "iam:PassedToService"
-      values   = ["ecs-tasks.amazonaws.com"]
+      values   = ["ecs-tasks.amazonaws.com", "vpc-flow-logs.amazonaws.com"]
     }
   }
 
