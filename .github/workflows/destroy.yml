@@ -1,0 +1,83 @@
+# -----------------------------------------------------------------------------
+# DESTROY — elimina TODOS los recursos de un ambiente. Solo manual.
+#
+# Uso: Actions -> Destroy -> Run workflow
+#   environment: dev | prod
+#   destroy:     true            (interruptor explícito, por defecto false)
+#   confirm:     <nombre del ambiente>  (segunda confirmación, escrita)
+#
+# Etapas:
+#   1. validate  Verifica destroy=true, la confirmación, la rama y quién lo pide.
+#   2. plan      terraform plan -destroy con el rol de SOLO LECTURA
+#                (se ve en el resumen exactamente qué se va a borrar).
+#   3. destroy   Corre en el GitHub Environment del ambiente: en prod exige
+#                aprobación manual. Aplica el plan de destrucción revisado y
+#                publica la lista de recursos eliminados.
+#
+# No toca el stack bootstrap (state, ECR, roles OIDC), que es compartido.
+# Después de destruir, pon APPLY_ENABLED=false en el environment para que el
+# próximo merge a main no vuelva a crear el ambiente.
+# -----------------------------------------------------------------------------
+name: Destroy
+
+on:
+  workflow_dispatch:
+    inputs:
+      environment:
+        description: Ambiente a destruir
+        type: choice
+        options: [dev, prod]
+        required: true
+      destroy:
+        description: "Destroy: marcar (true) para eliminar los recursos"
+        type: boolean
+        default: false
+      confirm:
+        description: Escribe el nombre del ambiente para confirmar
+        type: string
+        required: true
+
+permissions: {}
+
+# Un destroy por ambiente a la vez; nunca se cancela uno en curso.
+concurrency:
+  group: destroy-${{ inputs.environment }}
+  cancel-in-progress: false
+
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    permissions: {}
+    steps:
+      - name: Validar solicitud de destroy
+        env:
+          TARGET_ENV: ${{ inputs.environment }}
+          DESTROY: ${{ inputs.destroy }}
+          CONFIRM: ${{ inputs.confirm }}
+          REF: ${{ github.ref }}
+          ACTOR: ${{ github.actor }}
+        run: |
+          fail() { echo "::error::$1"; echo "❌ $1" >> "$GITHUB_STEP_SUMMARY"; exit 1; }
+          [ "$DESTROY" = "true" ] || fail "destroy no está en true: no se elimina nada."
+          [ "$CONFIRM" = "$TARGET_ENV" ] || fail "La confirmación '$CONFIRM' no coincide con el ambiente '$TARGET_ENV'."
+          [ "$REF" = "refs/heads/main" ] || fail "El destroy solo se ejecuta desde main (recibido: $REF)."
+          {
+            echo "## Solicitud de destroy validada"
+            echo "| Campo | Valor |"
+            echo "|---|---|"
+            echo "| Ambiente | \`$TARGET_ENV\` |"
+            echo "| Solicitado por | @$ACTOR |"
+            echo "| Rama | \`$REF\` |"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+  destroy:
+    needs: validate
+    permissions:
+      contents: read
+      id-token: write
+      pull-requests: write
+    uses: ./.github/workflows/_terraform.yml
+    with:
+      environment: ${{ inputs.environment }}
+      apply: true
+      destroy: true
