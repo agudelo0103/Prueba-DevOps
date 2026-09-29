@@ -169,13 +169,14 @@ jobs:
             tflint --chdir="$stack" --config "$GITHUB_WORKSPACE/.tflint.hcl" --format compact
           done
 
-      - name: Checkov (seguridad de IaC)
-        uses: bridgecrewio/checkov-action@99bb2caf247dfd9f03cf984373bc6043d4e32ebf # v12.1347.0
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
         with:
-          directory: terraform
-          config_file: .checkov.yaml
-          output_format: cli,sarif
-          output_file_path: console,checkov.sarif
+          python-version: "3.13"
+      - name: Checkov (seguridad de IaC)
+        run: |
+          pip install --quiet checkov==3.3.20
+          checkov -d terraform --config-file .checkov.yaml \
+            -o cli -o sarif --output-file-path console,checkov.sarif
       - uses: github/codeql-action/upload-sarif@416ff0dea110f80f0f56f0046500dbf7420e4bb0 # codeql-bundle-v2.27.1
         if: always() && hashFiles('checkov.sarif') != ''
         with:
