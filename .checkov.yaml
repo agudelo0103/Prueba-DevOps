@@ -1,0 +1,10 @@
+# Configuración de Checkov (escaneo de seguridad de IaC).
+# Las excepciones NO se definen aquí de forma global: cada una está junto al
+# recurso afectado (#checkov:skip=ID:razón) para que la justificación quede
+# revisada en el mismo PR que la introduce.
+framework:
+  - terraform
+compact: true
+quiet: true
+soft-fail: false
+download-external-modules: false
