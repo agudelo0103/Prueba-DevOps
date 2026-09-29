@@ -1,0 +1,175 @@
+# -----------------------------------------------------------------------------
+# CD — corre en cada merge a main. "Build once, promote everywhere":
+#
+#   build-push   (si cambió la app) build + Trivy + push a ECR con tag = SHA
+#   deploy-dev   plan + apply automático en dev
+#   smoke-dev    verifica /health y que dev corre exactamente ese SHA
+#   deploy-prod  plan + APROBACIÓN MANUAL (environment prod) + apply
+#                con el MISMO tag que se validó en dev
+# -----------------------------------------------------------------------------
+name: CD
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "app/**"
+      - "terraform/envs/**"
+      - "terraform/modules/**"
+      - ".github/workflows/cd.yml"
+      - ".github/workflows/_terraform.yml"
+  workflow_dispatch:
+
+permissions: {}
+
+# Nunca dos despliegues a la vez; tampoco se cancela uno en curso.
+concurrency:
+  group: cd-main
+  cancel-in-progress: false
+
+env:
+  AWS_REGION: us-east-1
+  ECR_REPOSITORY: prueba-devops-api
+
+jobs:
+  changes:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    outputs:
+      app: ${{ steps.filter.outputs.app }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: dorny/paths-filter@ceb8a2b8f2d89434be7ff52d3de7ec3738c5cc9d # v4.0.3
+        id: filter
+        with:
+          filters: |
+            app:
+              - 'app/**'
+
+  build-push:
+    needs: changes
+    if: needs.changes.outputs.app == 'true' || github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    environment: dev # el rol con permiso de push a ECR solo existe en dev
+    permissions:
+      contents: read
+      id-token: write
+    outputs:
+      image_tag: ${{ steps.meta.outputs.tag }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Metadatos
+        id: meta
+        run: echo "tag=${GITHUB_SHA}" >> "$GITHUB_OUTPUT"
+
+      - uses: aws-actions/configure-aws-credentials@e1253824e5c10ff9df46874f81ed3ec929e19cfd # v6.3.0
+        with:
+          role-to-assume: ${{ vars.AWS_DEPLOY_ROLE_ARN }}
+          role-session-name: gha-build-${{ github.run_id }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      - name: Login a ECR
+        id: ecr
+        uses: aws-actions/amazon-ecr-login@03f1aad4c6c7ffd436567f42f9384779290529bd # v2.1.7
+
+      - name: ¿La imagen ya existe? (re-ejecuciones idempotentes, tags inmutables)
+        id: exists
+        env:
+          TAG: ${{ steps.meta.outputs.tag }}
+        run: |
+          if aws ecr describe-images --repository-name "$ECR_REPOSITORY" --image-ids imageTag="$TAG" >/dev/null 2>&1; then
+            echo "found=true" >> "$GITHUB_OUTPUT"
+            echo "::notice::La imagen $TAG ya existe en ECR; se reutiliza"
+          else
+            echo "found=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
+        if: steps.exists.outputs.found == 'false'
+
+      - name: Build
+        if: steps.exists.outputs.found == 'false'
+        uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0
+        with:
+          context: app
+          load: true
+          push: false
+          tags: ${{ steps.ecr.outputs.registry }}/${{ env.ECR_REPOSITORY }}:${{ steps.meta.outputs.tag }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      - name: Trivy — gate antes de publicar
+        if: steps.exists.outputs.found == 'false'
+        uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
+        with:
+          image-ref: ${{ steps.ecr.outputs.registry }}/${{ env.ECR_REPOSITORY }}:${{ steps.meta.outputs.tag }}
+          severity: CRITICAL,HIGH
+          ignore-unfixed: true
+          exit-code: "1"
+
+      - name: Push a ECR
+        if: steps.exists.outputs.found == 'false'
+        env:
+          IMAGE: ${{ steps.ecr.outputs.registry }}/${{ env.ECR_REPOSITORY }}:${{ steps.meta.outputs.tag }}
+        run: docker push "$IMAGE"
+
+  deploy-dev:
+    needs: build-push
+    # Corre también cuando build-push se omitió (cambio solo de infraestructura).
+    if: ${{ !failure() && !cancelled() }}
+    permissions:
+      contents: read
+      id-token: write
+      pull-requests: write
+    uses: ./.github/workflows/_terraform.yml
+    with:
+      environment: dev
+      image_tag: ${{ needs.build-push.outputs.image_tag }}
+      apply: true
+
+  smoke-dev:
+    needs: deploy-dev
+    if: ${{ !failure() && !cancelled() }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions: {}
+    steps:
+      - name: Smoke test
+        env:
+          APP_URL: ${{ needs.deploy-dev.outputs.app_url }}
+          EXPECTED_TAG: ${{ needs.deploy-dev.outputs.image_tag }}
+        run: |
+          [ -n "$APP_URL" ] || { echo "::error::No se obtuvo la URL de dev"; exit 1; }
+          for i in $(seq 1 20); do
+            if curl -fsS --max-time 5 "$APP_URL/health"; then break; fi
+            echo " intento $i: aún no responde"; sleep 15
+            [ "$i" -eq 20 ] && { echo "::error::/health no respondió"; exit 1; }
+          done
+          echo
+          version="$(curl -fsS --max-time 5 "$APP_URL/version")"
+          echo "$version"
+          echo "$version" | grep -q "\"version\":\"$EXPECTED_TAG\"" \
+            || { echo "::error::dev no está corriendo $EXPECTED_TAG"; exit 1; }
+          echo "Dev OK en $APP_URL con la versión \`$EXPECTED_TAG\`" >> "$GITHUB_STEP_SUMMARY"
+
+  deploy-prod:
+    needs: [deploy-dev, smoke-dev]
+    if: ${{ !failure() && !cancelled() }}
+    permissions:
+      contents: read
+      id-token: write
+      pull-requests: write
+    uses: ./.github/workflows/_terraform.yml
+    with:
+      environment: prod
+      # Se promueve exactamente el mismo artefacto que se validó en dev.
+      image_tag: ${{ needs.deploy-dev.outputs.image_tag }}
+      apply: true
+      apply_enabled: ${{ vars.PROD_APPLY_ENABLED == 'true' }}

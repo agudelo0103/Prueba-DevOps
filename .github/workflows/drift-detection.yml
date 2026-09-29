@@ -1,0 +1,98 @@
+# -----------------------------------------------------------------------------
+# Detección de drift: todas las noches compara el código con AWS. Si alguien
+# hizo un cambio manual (o algo cambió fuera de Terraform), abre un issue.
+# -----------------------------------------------------------------------------
+name: Drift detection
+
+on:
+  schedule:
+    - cron: "0 11 * * 1-5" # 06:00 hora Colombia, lunes a viernes
+  workflow_dispatch:
+
+permissions: {}
+
+env:
+  TF_VERSION: 1.16.4
+  AWS_REGION: us-east-1
+
+jobs:
+  drift:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      matrix:
+        environment: [dev, prod]
+    permissions:
+      contents: read
+      id-token: write
+      issues: write
+    defaults:
+      run:
+        working-directory: terraform/envs/${{ matrix.environment }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - uses: aws-actions/configure-aws-credentials@e1253824e5c10ff9df46874f81ed3ec929e19cfd # v6.3.0
+        with:
+          role-to-assume: ${{ vars.AWS_PLAN_ROLE_ARN }}
+          role-session-name: gha-drift-${{ matrix.environment }}-${{ github.run_id }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      - name: Tag desplegado
+        id: tag
+        env:
+          TARGET_ENV: ${{ matrix.environment }}
+        run: |
+          tag="$(aws ssm get-parameter --name "/prueba-devops/$TARGET_ENV/image-tag" --query Parameter.Value --output text 2>/dev/null || true)"
+          echo "image_tag=$tag" >> "$GITHUB_OUTPUT"
+          [ -z "$tag" ] && echo "::notice::$TARGET_ENV no está desplegado; se omite"
+          true
+
+      - uses: hashicorp/setup-terraform@dfe3c3f87815947d99a8997f908cb6525fc44e9e # v4.0.1
+        if: steps.tag.outputs.image_tag != ''
+        with:
+          terraform_version: ${{ env.TF_VERSION }}
+          terraform_wrapper: false
+
+      - name: terraform plan (detección)
+        id: plan
+        if: steps.tag.outputs.image_tag != ''
+        env:
+          IMAGE_TAG: ${{ steps.tag.outputs.image_tag }}
+        run: |
+          terraform init -lockfile=readonly >/dev/null
+          set +e
+          terraform plan -detailed-exitcode -no-color -lock=false -var "image_tag=$IMAGE_TAG" > plan.txt 2>&1
+          code=$?
+          set -e
+          cat plan.txt
+          [ "$code" -eq 1 ] && exit 1
+          echo "drift=$([ "$code" -eq 2 ] && echo true || echo false)" >> "$GITHUB_OUTPUT"
+
+      - name: Abrir / actualizar issue de drift
+        if: steps.plan.outputs.drift == 'true'
+        uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9.0.0
+        env:
+          TARGET_ENV: ${{ matrix.environment }}
+          PLAN_FILE: terraform/envs/${{ matrix.environment }}/plan.txt
+        with:
+          script: |
+            const fs = require('fs');
+            const env = process.env.TARGET_ENV;
+            const title = `Drift detectado en ${env}`;
+            const plan = fs.readFileSync(process.env.PLAN_FILE, 'utf8').slice(0, 60000);
+            const body = `La infraestructura real de **${env}** no coincide con el código.\n\n` +
+              `Acción: incorporar el cambio al código vía PR o revertirlo con un apply.\n\n` +
+              `<details><summary>Plan</summary>\n\n\`\`\`\n${plan}\n\`\`\`\n</details>\n\n` +
+              `Run: ${context.serverUrl}/${context.repo.owner}/${context.repo.repo}/actions/runs/${context.runId}`;
+            const { data: issues } = await github.rest.issues.listForRepo({ ...context.repo, state: 'open', labels: 'drift' });
+            const existing = issues.find(i => i.title === title);
+            if (existing) {
+              await github.rest.issues.createComment({ ...context.repo, issue_number: existing.number, body });
+            } else {
+              await github.rest.issues.create({ ...context.repo, title, body, labels: ['drift'] });
+            }
+            core.setFailed(title);
