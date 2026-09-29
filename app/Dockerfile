@@ -1,7 +1,7 @@
 # syntax=docker/dockerfile:1
 
 # ---- Etapa de build: instala dependencias en un virtualenv aislado ----
-FROM python:3.13-slim AS build
+FROM python:3.14-slim AS build
 WORKDIR /app
 RUN python -m venv /opt/venv
 ENV PATH="/opt/venv/bin:$PATH"
@@ -10,7 +10,7 @@ RUN pip install --no-cache-dir -r requirements.txt \
     && pip uninstall -y pip  # pip no se necesita en runtime
 
 # ---- Etapa final: imagen mínima, sin herramientas de build, usuario no root ----
-FROM python:3.13-slim
+FROM python:3.14-slim
 ENV PATH="/opt/venv/bin:$PATH" \
     PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1
