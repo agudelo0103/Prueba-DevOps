@@ -15,7 +15,7 @@ ENV PATH="/opt/venv/bin:$PATH" \
     PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1
 # Se elimina pip de la imagen base: no se usa en runtime y reduce superficie de ataque/CVEs.
-RUN rm -rf /usr/local/lib/python3.13/site-packages/pip* /usr/local/bin/pip* \
+RUN rm -rf /usr/local/lib/python3.*/site-packages/pip* /usr/local/bin/pip* \
     && groupadd --system --gid 10001 app \
     && useradd --system --uid 10001 --gid app --no-create-home app
 WORKDIR /app
