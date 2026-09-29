@@ -1,0 +1,34 @@
+# Terraform
+**/.terraform/*
+*.tfstate
+*.tfstate.*
+*.tfplan
+tfplan
+plan.txt
+plan.log
+crash.log
+override.tf
+override.tf.json
+*_override.tf
+*_override.tf.json
+.terraformrc
+terraform.rc
+# Los .tfvars de este repo no contienen secretos y SÍ se versionan.
+# Cualquier archivo con secretos debe llamarse *.secret.tfvars (ignorado).
+*.secret.tfvars
+
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+.pytest_cache/
+.ruff_cache/
+
+# Editor / SO
+.idea/
+.vscode/
+.DS_Store
+
+# Enunciado de la prueba (no se publica)
+Prueba DEVOPS.pdf
