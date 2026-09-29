@@ -112,6 +112,9 @@ resource "aws_ecs_task_definition" "api" {
     cpu_architecture        = "X86_64"
   }
 
+  # Los valores por defecto que AWS agrega (hostPort, listas vacías) se declaran
+  # explícitamente; si no, cada plan detecta una diferencia y recrea la task
+  # definition (drift perpetuo y un despliegue innecesario en cada apply).
   container_definitions = jsonencode([{
     name                   = local.container_name
     image                  = var.container_image
@@ -121,14 +124,18 @@ resource "aws_ecs_task_definition" "api" {
     user                   = "10001"
     portMappings = [{
       containerPort = var.container_port
+      hostPort      = var.container_port
       protocol      = "tcp"
     }]
+    mountPoints    = []
+    volumesFrom    = []
+    systemControls = []
     environment = [
       { name = "APP_ENV", value = var.environment },
       { name = "APP_VERSION", value = var.app_version },
     ]
     linuxParameters = {
-      capabilities = { drop = ["ALL"] }
+      capabilities = { add = [], drop = ["ALL"] }
     }
     logConfiguration = {
       logDriver = "awslogs"
