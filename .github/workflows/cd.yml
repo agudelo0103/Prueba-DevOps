@@ -6,6 +6,9 @@
 #   smoke-dev    verifica /health y que dev corre exactamente ese SHA
 #   deploy-prod  plan + APROBACIÓN MANUAL (environment prod) + apply
 #                con el MISMO tag que se validó en dev
+#
+# Cada environment tiene la variable APPLY_ENABLED (interruptor de costos).
+# Para eliminar un ambiente: workflow "Destroy" (destroy.yml).
 # -----------------------------------------------------------------------------
 name: CD
 
@@ -136,7 +139,8 @@ jobs:
 
   smoke-dev:
     needs: deploy-dev
-    if: ${{ !failure() && !cancelled() }}
+    # Se omite si dev está apagado (APPLY_ENABLED=false en el environment dev).
+    if: ${{ !failure() && !cancelled() && needs.deploy-dev.outputs.applied != 'false' }}
     runs-on: ubuntu-latest
     timeout-minutes: 10
     permissions: {}
@@ -161,7 +165,8 @@ jobs:
 
   deploy-prod:
     needs: [deploy-dev, smoke-dev]
-    if: ${{ !failure() && !cancelled() }}
+    # Solo se promueve a prod lo que pasó el smoke test en dev.
+    if: ${{ !cancelled() && needs.smoke-dev.result == 'success' }}
     permissions:
       contents: read
       id-token: write
@@ -172,4 +177,3 @@ jobs:
       # Se promueve exactamente el mismo artefacto que se validó en dev.
       image_tag: ${{ needs.deploy-dev.outputs.image_tag }}
       apply: true
-      apply_enabled: ${{ vars.PROD_APPLY_ENABLED == 'true' }}

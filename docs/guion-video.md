@@ -28,7 +28,10 @@
 - Hacer merge y mostrar el run de CD: build + Trivy → push ECR `:sha` → apply dev → smoke test.
 - Abrir la URL de dev: `/version` muestra el SHA del commit.
 - Job de prod: **"Waiting for review"** → aprobar. Explicar que el environment `prod` es el único que puede asumir el rol de prod.
-- Nota: en esta prueba el apply de prod está apagado por costos (`PROD_APPLY_ENABLED=false`); la aprobación y el plan sí corren.
+- Nota: el apply de prod está apagado por costos (`APPLY_ENABLED=false` en el environment `prod`); la aprobación y el plan sí corren.
+- Mostrar el **inventario** en el resumen del job `apply (dev)`: recursos por módulo y recursos reales en AWS por tags.
+- Mostrar el workflow **Destroy**: inputs `destroy: true` + confirmación escrita → validate → plan -destroy → destroy, con la lista de recursos eliminados.
+- Si dev está apagado, antes de grabar: `APPLY_ENABLED=true` en dev y **CD → Run workflow** (≈ 5 min).
 
 ## 4. Ramas, secretos y credenciales (2 min)
 - Trunk-based: `main` + ramas cortas; los ambientes son etapas, no ramas.

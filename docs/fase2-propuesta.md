@@ -1,9 +1,9 @@
 # Fase 2 — Propuesta de pipeline y arquitectura operativa
 
-> Todo lo descrito aquí está **implementado y funcionando** en este repositorio:
-> el ambiente `dev` está desplegado en AWS por el pipeline, y `prod` tiene
-> plan + aprobación manual (el apply está apagado solo por costos con la
-> variable `PROD_APPLY_ENABLED`).
+> Todo lo descrito aquí está **implementado y funcionando** en este repositorio.
+> `dev` se desplegó y se destruyó en AWS por el pipeline, y `prod` tiene plan +
+> aprobación manual. Cada environment tiene un interruptor de costos
+> (`APPLY_ENABLED`), y el workflow **Destroy** elimina un ambiente completo.
 
 ## Índice
 
@@ -113,6 +113,8 @@ merge a main
   - exige **aprobación de un revisor**;
   - es el único contexto que puede asumir el rol `gha-deploy-prod` (la trust policy OIDC valida `environment:prod`).
 - **Rollback:** automático (circuit breaker) o manual con `workflow_dispatch` / revert del PR, que despliega el tag anterior. Como los tags son inmutables, "volver atrás" es volver a un SHA conocido.
+- **Inventario por ambiente:** al final de cada apply, el resumen del run lista los recursos por módulo (state de Terraform) y los recursos reales en AWS encontrados por tags `Project`/`Environment`.
+- **Apagar un ambiente:** workflow **Destroy** (manual). Etapas: `validate` (exige `destroy=true`, escribir el nombre del ambiente y rama `main`) → `plan -destroy` con el rol de solo lectura → `destroy` dentro del environment (prod pide aprobación). Luego `APPLY_ENABLED=false` evita que el siguiente merge lo vuelva a crear.
 - **Cambios solo de infraestructura:** el pipeline no reconstruye la imagen; lee el tag desplegado desde SSM (`/prueba-devops/<env>/image-tag`) para no cambiar la versión de la app sin querer.
 
 ---
